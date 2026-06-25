@@ -40,6 +40,7 @@ These are the current differences compared to the upstream project:
 	-	Motions: `w`, `W`, `e`, `E`, `b`, `B`, `0`, `$`
 	-	Visual line mode: `V`
 	-	Restore the last visual selection: `gv`
+-	When leaving insert mode, the cursor returns to the last edited character, like Vim
 -	Adjusted defaults ([511060a](https://github.com/usagi-flow/evil-helix/commit/511060abcfcbe9377ec50e8a0ecaf4c0660776bb)):
 	-	The Helix "SEL" mode is called "VIS"
 	-	Smart tab is disabled by default
