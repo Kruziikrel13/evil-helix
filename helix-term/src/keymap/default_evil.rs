@@ -61,6 +61,7 @@ pub fn default_evil() -> HashMap<Mode, KeyTrie> {
             "j" => move_anchored_line_down,
             "." => goto_last_modification,
             "w" => goto_word,
+            "v" => evil_restore_visual,
         },
         ":" => command_mode,
 
