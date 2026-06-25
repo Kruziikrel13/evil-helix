@@ -47,7 +47,7 @@ use helix_core::{
     visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
     Selection, SmallVec, Syntax, Tendril, Transaction,
 };
-use helix_view::editor::EvilSelectMode;
+use helix_view::editor::{EvilLastVisual, EvilSelectMode};
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::{Action, Motion},
@@ -688,6 +688,7 @@ impl MappableCommand {
         evil_goto_line_or_last_line, "Goto last line (evil)",
         evil_characterwise_select_mode, "Enter/exit characterwise select mode",
         evil_linewise_select_mode, "Enter/exit linewise select mode",
+        evil_restore_visual, "Restore the last visual selection (evil)",
         command_palette, "Open command palette",
         goto_word, "Jump to a two-character label",
         extend_to_word, "Extend to a two-character label",
@@ -4381,6 +4382,22 @@ pub fn select_mode(cx: &mut Context) {
 }
 
 pub fn exit_select_mode(cx: &mut Context) {
+    // Remember the visual selection before it is collapsed, so `gv` can restore it.
+    if cx.editor.mode == Mode::Select {
+        let mode = cx.editor.evil_select_mode;
+        let last = {
+            let (view, doc) = current!(cx.editor);
+            let range = doc.selection(view.id).primary();
+            EvilLastVisual {
+                doc: doc.id(),
+                anchor: range.anchor,
+                head: range.head,
+                mode,
+            }
+        };
+        cx.editor.evil_last_visual = Some(last);
+    }
+
     if EvilCommands::is_enabled() {
         // In evil mode, selections are possible in the selection/visual mode only.
         EvilCommands::collapse_selections(cx, CollapseMode::ToHead);
@@ -4388,6 +4405,41 @@ pub fn exit_select_mode(cx: &mut Context) {
 
     if cx.editor.mode == Mode::Select {
         cx.editor.mode = Mode::Normal;
+    }
+}
+
+/// Restore the last visual selection, like Vim's `gv`. Only restores within the
+/// document the selection was made in; the range is clamped to the current text.
+///
+/// Only the primary range is remembered (secondary cursors are not restored), and
+/// the selection is captured when leaving select mode, so after an in-visual edit
+/// (e.g. `vd`) the restored selection reflects the post-edit position.
+fn evil_restore_visual(cx: &mut Context) {
+    let Some(last) = cx.editor.evil_last_visual else {
+        return;
+    };
+
+    let restored = {
+        let (view, doc) = current!(cx.editor);
+        if doc.id() != last.doc {
+            false
+        } else {
+            let len = doc.text().len_chars();
+            let selection = Selection::single(last.anchor.min(len), last.head.min(len));
+            doc.set_selection(view.id, selection);
+            true
+        }
+    };
+    if !restored {
+        return;
+    }
+
+    cx.editor.mode = Mode::Select;
+    cx.editor.evil_select_mode = last.mode;
+
+    // Rebuild the line-wise two-range structure from the restored primary range.
+    if let EvilSelectMode::LineWise = last.mode {
+        evil_transform_selection_linewise(cx);
     }
 }
 

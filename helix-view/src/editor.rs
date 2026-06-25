@@ -1357,8 +1357,20 @@ impl std::fmt::Display for EvilSelectMode {
     }
 }
 
+/// The last visual selection, remembered when leaving select mode so it can be
+/// restored with `gv`, like Vim. Stores the primary range and the select mode.
+#[derive(Copy, Clone)]
+pub struct EvilLastVisual {
+    pub doc: DocumentId,
+    pub anchor: usize,
+    pub head: usize,
+    pub mode: EvilSelectMode,
+}
+
 pub struct Editor {
     pub evil_select_mode: EvilSelectMode,
+    /// The last visual selection, for `gv`.
+    pub evil_last_visual: Option<EvilLastVisual>,
 
     /// Current editing mode.
     pub mode: Mode,
@@ -1516,6 +1528,7 @@ impl Editor {
 
         Self {
             evil_select_mode: EvilSelectMode::CharacterWise,
+            evil_last_visual: None,
             mode: Mode::Normal,
             tree: Tree::new(area),
             next_document_id: DocumentId::default(),
