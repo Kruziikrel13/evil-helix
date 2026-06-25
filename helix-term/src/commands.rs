@@ -806,13 +806,20 @@ type MoveFn =
 
 fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movement) {
     let count = cx.count();
+    // Vim-like behavior: when not extending a selection, keep the cursor from
+    // resting on the end-of-line line break. Only applies in normal mode and when
+    // `evil-cursor-past-eol` is disabled; select mode (Extend) is left untouched.
+    // The option defaults to Vim-style in evil mode and Helix-style otherwise.
+    let config = cx.editor.config();
+    let past_eol = config.evil_cursor_past_eol.unwrap_or(!config.evil);
+    let clamp_eol = behaviour == Movement::Move && cx.editor.mode == Mode::Normal && !past_eol;
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
     let text_fmt = doc.text_format(view.inner_area(doc).width, None);
     let mut annotations = view.text_annotations(doc, None);
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        move_fn(
+        let range = move_fn(
             text,
             range,
             dir,
@@ -820,10 +827,35 @@ fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movem
             behaviour,
             &text_fmt,
             &mut annotations,
-        )
+        );
+        if clamp_eol {
+            clamp_cursor_before_eol(text, range)
+        } else {
+            range
+        }
     });
     drop(annotations);
     doc.set_selection(view.id, selection);
+}
+
+/// If the cursor sits on the end-of-line line break of a non-empty line, pull it
+/// back to the last grapheme before the break, like Vim. Empty lines (where the
+/// line break is the only position) are left unchanged.
+fn clamp_cursor_before_eol(text: RopeSlice, range: Range) -> Range {
+    let cursor = range.cursor(text);
+    let line = text.char_to_line(cursor);
+    let line_start = text.line_to_char(line);
+    let line_end = line_end_char_index(&text, line);
+    if cursor >= line_end && line_end > line_start {
+        let pos = graphemes::prev_grapheme_boundary(text, line_end);
+        let mut clamped = range.put_cursor(text, pos, false);
+        // Preserve the desired column so vertical motion through short lines
+        // still restores the original column (Vim's `curswant`).
+        clamped.old_visual_position = range.old_visual_position;
+        clamped
+    } else {
+        range
+    }
 }
 
 use helix_core::movement::{

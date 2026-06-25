@@ -296,6 +296,11 @@ where
 pub struct Config {
     /// Vim keybindings and behavior. Defaults to true.
     pub evil: bool,
+    /// Whether the cursor may rest on the end-of-line line break, as in Helix.
+    /// When false, horizontal/vertical motions keep the cursor before the line
+    /// break, like Vim. When unset, defaults to Vim-style (false) in evil mode and
+    /// Helix-style (true) otherwise.
+    pub evil_cursor_past_eol: Option<bool>,
     /// Padding to keep between the edge of the screen and the cursor when scrolling. Defaults to 5.
     pub scrolloff: usize,
     /// Number of lines to scroll at once. Defaults to 3
@@ -1234,6 +1239,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             evil: false,
+            evil_cursor_past_eol: None,
             scrolloff: 5,
             scroll_lines: 3,
             mouse: true,
