@@ -125,6 +125,11 @@ impl Config {
             (Err(err), Err(_)) => return Err(err),
         };
 
+        // The editor config may be built via `try_into` (which uses the plain
+        // `Default`, not `default_evil`), so reconcile `evil` with the authoritative
+        // detection. Other consumers can then rely on `config.evil`.
+        res.editor.evil = evil;
+
         // HACK: because we can't easily differentiate between "no configuration" and
         // "explicit non-evil mode configuration"
         if evil {

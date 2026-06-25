@@ -55,6 +55,13 @@ Moreover, evil-helix introduces the `editor.evil` option, which is `true` by def
 evil = true # Default; set this to `false` to disable evil-helix behavior
 ```
 
+In evil mode the cursor also stops before the end-of-line line break instead of resting on it, like Vim. Set `editor.evil-cursor-past-eol` to `true` to restore Helix's behavior:
+
+```toml
+[editor]
+evil-cursor-past-eol = true # Allow the cursor to rest on the end-of-line line break, as in Helix
+```
+
 ## Project philosophy
 
 ### Configurable features instead of plugins
