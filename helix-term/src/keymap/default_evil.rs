@@ -401,8 +401,9 @@ pub fn default_evil() -> HashMap<Mode, KeyTrie> {
         },
     }));
     let insert = keymap!({ "Insert mode"
-        // `C-c` leaves insert mode like `esc`, matching Vim.
-        "esc" | "C-c" => normal_mode,
+        // `C-c` leaves insert mode like `esc`, both moving the cursor back onto
+        // the last edited character, like Vim.
+        "esc" | "C-c" => evil_normal_mode,
 
         "C-s" => commit_undo_checkpoint,
         "C-x" => completion,
