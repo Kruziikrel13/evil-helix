@@ -806,7 +806,13 @@ fn no_op(_cx: &mut Context) {}
 type MoveFn =
     fn(RopeSlice, Range, Direction, usize, Movement, &TextFormat, &mut TextAnnotations) -> Range;
 
-fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movement) {
+fn move_impl(
+    cx: &mut Context,
+    move_fn: MoveFn,
+    dir: Direction,
+    behaviour: Movement,
+    vertical: bool,
+) {
     let count = cx.count();
     // Vim-like behavior: when not extending a selection, keep the cursor from
     // resting on the end-of-line line break. Only applies in normal mode and when
@@ -821,7 +827,8 @@ fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movem
     let mut annotations = view.text_annotations(doc, None);
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let range = move_fn(
+        let origin = range.cursor(text);
+        let moved = move_fn(
             text,
             range,
             dir,
@@ -830,11 +837,27 @@ fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movem
             &text_fmt,
             &mut annotations,
         );
-        if clamp_eol {
-            clamp_cursor_before_eol(text, range)
-        } else {
-            range
+        if !clamp_eol {
+            return moved;
         }
+        let mut result = clamp_cursor_before_eol(text, moved);
+        // A soft-wrapped line whose width is an exact multiple of the viewport
+        // puts its trailing line break on an otherwise-empty visual row. A
+        // vertical move can land there, and clamping pulls the cursor back to
+        // where it started, trapping it. Step one visual row at a time past such
+        // rows so the motion still makes progress; stop at a buffer boundary.
+        if vertical && moved.cursor(text) != origin {
+            let mut from = moved;
+            while result.cursor(text) == origin {
+                let stepped = move_fn(text, from, dir, 1, behaviour, &text_fmt, &mut annotations);
+                if stepped.cursor(text) == from.cursor(text) {
+                    break;
+                }
+                from = stepped;
+                result = clamp_cursor_before_eol(text, stepped);
+            }
+        }
+        result
     });
     drop(annotations);
     doc.set_selection(view.id, selection);
@@ -866,11 +889,23 @@ use helix_core::movement::{
 };
 
 fn move_char_left(cx: &mut Context) {
-    move_impl(cx, move_horizontally, Direction::Backward, Movement::Move)
+    move_impl(
+        cx,
+        move_horizontally,
+        Direction::Backward,
+        Movement::Move,
+        false,
+    )
 }
 
 fn move_char_right(cx: &mut Context) {
-    move_impl(cx, move_horizontally, Direction::Forward, Movement::Move)
+    move_impl(
+        cx,
+        move_horizontally,
+        Direction::Forward,
+        Movement::Move,
+        false,
+    )
 }
 
 fn move_same_line_char_left(cx: &mut Context) {
@@ -879,6 +914,7 @@ fn move_same_line_char_left(cx: &mut Context) {
         move_horizontally_same_line,
         Direction::Backward,
         Movement::Move,
+        false,
     )
 }
 
@@ -888,15 +924,28 @@ fn move_same_line_char_right(cx: &mut Context) {
         move_horizontally_same_line,
         Direction::Forward,
         Movement::Move,
+        false,
     )
 }
 
 fn move_line_up(cx: &mut Context) {
-    move_impl(cx, move_vertically, Direction::Backward, Movement::Move)
+    move_impl(
+        cx,
+        move_vertically,
+        Direction::Backward,
+        Movement::Move,
+        true,
+    )
 }
 
 fn move_line_down(cx: &mut Context) {
-    move_impl(cx, move_vertically, Direction::Forward, Movement::Move)
+    move_impl(
+        cx,
+        move_vertically,
+        Direction::Forward,
+        Movement::Move,
+        true,
+    )
 }
 
 fn move_anchored_line_up(cx: &mut Context) {
@@ -905,6 +954,7 @@ fn move_anchored_line_up(cx: &mut Context) {
         move_vertically_anchored,
         Direction::Backward,
         Movement::Move,
+        true,
     )
 }
 
@@ -914,6 +964,7 @@ fn move_anchored_line_down(cx: &mut Context) {
         move_vertically_anchored,
         Direction::Forward,
         Movement::Move,
+        true,
     )
 }
 
@@ -923,6 +974,7 @@ fn move_visual_line_up(cx: &mut Context) {
         move_vertically_visual,
         Direction::Backward,
         Movement::Move,
+        true,
     )
 }
 
@@ -932,6 +984,7 @@ fn move_visual_line_down(cx: &mut Context) {
         move_vertically_visual,
         Direction::Forward,
         Movement::Move,
+        true,
     )
 }
 
@@ -941,6 +994,7 @@ fn move_anchored_visual_line_up(cx: &mut Context) {
         move_vertically_anchored_visual,
         Direction::Backward,
         Movement::Move,
+        true,
     )
 }
 
@@ -950,15 +1004,28 @@ fn move_anchored_visual_line_down(cx: &mut Context) {
         move_vertically_anchored_visual,
         Direction::Forward,
         Movement::Move,
+        true,
     )
 }
 
 fn extend_char_left(cx: &mut Context) {
-    move_impl(cx, move_horizontally, Direction::Backward, Movement::Extend)
+    move_impl(
+        cx,
+        move_horizontally,
+        Direction::Backward,
+        Movement::Extend,
+        false,
+    )
 }
 
 fn extend_char_right(cx: &mut Context) {
-    move_impl(cx, move_horizontally, Direction::Forward, Movement::Extend)
+    move_impl(
+        cx,
+        move_horizontally,
+        Direction::Forward,
+        Movement::Extend,
+        false,
+    )
 }
 
 fn extend_same_line_char_left(cx: &mut Context) {
@@ -967,6 +1034,7 @@ fn extend_same_line_char_left(cx: &mut Context) {
         move_horizontally_same_line,
         Direction::Backward,
         Movement::Extend,
+        false,
     )
 }
 
@@ -976,15 +1044,28 @@ fn extend_same_line_char_right(cx: &mut Context) {
         move_horizontally_same_line,
         Direction::Forward,
         Movement::Extend,
+        false,
     )
 }
 
 fn extend_line_up(cx: &mut Context) {
-    move_impl(cx, move_vertically, Direction::Backward, Movement::Extend)
+    move_impl(
+        cx,
+        move_vertically,
+        Direction::Backward,
+        Movement::Extend,
+        true,
+    )
 }
 
 fn extend_line_down(cx: &mut Context) {
-    move_impl(cx, move_vertically, Direction::Forward, Movement::Extend)
+    move_impl(
+        cx,
+        move_vertically,
+        Direction::Forward,
+        Movement::Extend,
+        true,
+    )
 }
 
 fn extend_anchored_line_up(cx: &mut Context) {
@@ -993,6 +1074,7 @@ fn extend_anchored_line_up(cx: &mut Context) {
         move_vertically_anchored,
         Direction::Backward,
         Movement::Extend,
+        true,
     )
 }
 
@@ -1002,6 +1084,7 @@ fn extend_anchored_line_down(cx: &mut Context) {
         move_vertically_anchored,
         Direction::Forward,
         Movement::Extend,
+        true,
     )
 }
 
@@ -1011,6 +1094,7 @@ fn extend_visual_line_up(cx: &mut Context) {
         move_vertically_visual,
         Direction::Backward,
         Movement::Extend,
+        true,
     )
 }
 
@@ -1020,6 +1104,7 @@ fn extend_visual_line_down(cx: &mut Context) {
         move_vertically_visual,
         Direction::Forward,
         Movement::Extend,
+        true,
     )
 }
 
@@ -1029,6 +1114,7 @@ fn extend_anchored_visual_line_up(cx: &mut Context) {
         move_vertically_anchored_visual,
         Direction::Backward,
         Movement::Extend,
+        true,
     )
 }
 
@@ -1038,6 +1124,7 @@ fn extend_anchored_visual_line_down(cx: &mut Context) {
         move_vertically_anchored_visual,
         Direction::Forward,
         Movement::Extend,
+        true,
     )
 }
 
