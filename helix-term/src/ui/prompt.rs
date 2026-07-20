@@ -658,7 +658,7 @@ impl Component for Prompt {
                 self.delete_char_forwards(cx.editor);
                 (self.callback_fn)(cx, &self.line, PromptEvent::Update);
             }
-            ctrl!('s') => {
+            ctrl!('x') => {
                 let (view, doc) = current!(cx.editor);
                 let text = doc.text().slice(..);
 
@@ -676,7 +676,7 @@ impl Component for Prompt {
                     (self.callback_fn)(cx, &self.line, PromptEvent::Update);
                 }
             }
-            key!(Enter) => {
+            alt!(Enter) => {
                 if self.selection.is_some() && self.line.ends_with(std::path::MAIN_SEPARATOR) {
                     self.recalculate_completion(cx.editor);
                 } else {
@@ -709,26 +709,22 @@ impl Component for Prompt {
                 }
             }
             // I FOUND IT
-            ctrl!('p') | key!(Up) => {
+            alt!('k') => {
                 if let Some(register) = self.history_register {
                     self.change_history(cx, register, CompletionDirection::Backward);
                 }
             }
-            ctrl!('n') | key!(Down) => {
+            alt!('j') => {
                 if let Some(register) = self.history_register {
                     self.change_history(cx, register, CompletionDirection::Forward);
                 }
             }
-            key!(Tab) => {
+            alt!(Tab) => {
                 self.change_completion_selection(CompletionDirection::Forward);
                 // if single completion candidate is a directory list content in completion
                 if self.completion.len() == 1 && self.line.ends_with(std::path::MAIN_SEPARATOR) {
                     self.recalculate_completion(cx.editor);
                 }
-                (self.callback_fn)(cx, &self.line, PromptEvent::Update)
-            }
-            shift!(Tab) => {
-                self.change_completion_selection(CompletionDirection::Backward);
                 (self.callback_fn)(cx, &self.line, PromptEvent::Update)
             }
             ctrl!('q') => self.exit_selection(),
