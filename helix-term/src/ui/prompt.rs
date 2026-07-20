@@ -708,6 +708,7 @@ impl Component for Prompt {
                     return close_fn;
                 }
             }
+            // I FOUND IT
             ctrl!('p') | key!(Up) => {
                 if let Some(register) = self.history_register {
                     self.change_history(cx, register, CompletionDirection::Backward);
