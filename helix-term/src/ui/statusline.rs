@@ -130,7 +130,7 @@ where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     match element_id {
-        helix_view::editor::StatusLineElement::Mode => render_mode,
+        helix_view::editor::StatusLineElement::Mode => evil_render_mode,
         helix_view::editor::StatusLineElement::Spinner => render_lsp_spinner,
         helix_view::editor::StatusLineElement::FileBaseName => render_file_base_name,
         helix_view::editor::StatusLineElement::FileName => render_file_name,
@@ -191,6 +191,29 @@ where
     write(context, Span::styled(content, style));
 }
 
+fn evil_render_mode<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    render_mode(context, write);
+
+    let visible = context.focused;
+    let config = context.editor.config();
+    let content = format!("{} ", context.editor.evil_select_mode)
+        .trim_start()
+        .to_string();
+    let style = if config.color_modes {
+        context.editor.theme.get("ui.statusline.select")
+    } else {
+        Style::default()
+    };
+
+    if visible && context.editor.mode == Mode::Select {
+        write(context, Span::styled(content, style));
+    }
+}
+
+// TODO think about handling multiple language servers
 fn render_lsp_spinner<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
@@ -439,8 +462,25 @@ where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     let file_type = context.doc.language_name().unwrap_or(DEFAULT_LANGUAGE_NAME);
+    let visible = context.focused;
 
-    write(context, format!(" {} ", file_type).into());
+    let style = if visible && context.editor.config().color_modes {
+        match context.editor.mode() {
+            Mode::Insert => Some(context.editor.theme.get("ui.statusline.insert")),
+            Mode::Select => Some(context.editor.theme.get("ui.statusline.select")),
+            Mode::Normal => Some(context.editor.theme.get("ui.statusline.normal")),
+        }
+    } else {
+        None
+    };
+
+    let content = format!(" {} ", file_type);
+
+    if let Some(style) = style {
+        write(context, Span::styled(content, style));
+    } else {
+        write(context, content.into());
+    }
 }
 
 fn render_file_name<'a, F>(context: &mut RenderContext<'a>, write: F)
