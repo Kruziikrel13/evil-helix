@@ -26,7 +26,7 @@ pub static BASE16_DEFAULT_THEME_DATA: Lazy<Value> = Lazy::new(|| {
 });
 
 pub static DEFAULT_THEME: Lazy<Theme> = Lazy::new(|| Theme {
-    name: "default".into(),
+    name: "catppuccin_macchiato".into(),
     ..Theme::from(DEFAULT_THEME_DATA.clone())
 });
 
@@ -476,6 +476,10 @@ impl Theme {
         self.rainbow_length
     }
 
+    pub fn get_rainbow(&self, index: usize) -> Style {
+        self.highlights[index % self.rainbow_length]
+    }
+
     fn from_toml(value: Value) -> (Self, Vec<String>) {
         if let Value::Table(table) = value {
             Theme::from_keys(table)
@@ -718,6 +722,53 @@ mod tests {
                 .bg(Color::Rgb(0, 0, 0))
                 .add_modifier(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn test_parse_valid_style_array() {
+        let theme = toml::toml! {
+            rainbow = ["#ff0000", "#ffa500", "#fff000", { fg = "#00ff00", modifiers = ["bold"] }]
+        };
+
+        let palette = ThemePalette::default();
+
+        let rainbow = theme.get("rainbow").unwrap();
+        let parse_result = palette.parse_style_array(rainbow.clone());
+
+        assert_eq!(
+            Ok(vec![
+                Style::default().fg(Color::Rgb(255, 0, 0)),
+                Style::default().fg(Color::Rgb(255, 165, 0)),
+                Style::default().fg(Color::Rgb(255, 240, 0)),
+                Style::default()
+                    .fg(Color::Rgb(0, 255, 0))
+                    .add_modifier(Modifier::BOLD),
+            ]),
+            parse_result
+        )
+    }
+
+    #[test]
+    fn test_parse_invalid_style_array() {
+        let palette = ThemePalette::default();
+
+        let theme = toml::toml! { invalid_hex_code = ["#f00f"] };
+        let invalid_hex_code = theme.get("invalid_hex_code").unwrap();
+        let parse_result = palette.parse_style_array(invalid_hex_code.clone());
+
+        assert_eq!(
+            Err("Malformed hex color code: Must be 12 or 24 bit RGB: #f00f".to_string()),
+            parse_result
+        );
+
+        let theme = toml::toml! { not_an_array = { red = "#ff0000" } };
+        let not_an_array = theme.get("not_an_array").unwrap();
+        let parse_result = palette.parse_style_array(not_an_array.clone());
+
+        assert_eq!(
+            Err("Could not parse value as an array: '{ red = \"#ff0000\" }'".to_string()),
+            parse_result
+        )
     }
 
     // tests for parsing an RGB `Highlight`

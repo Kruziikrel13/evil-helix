@@ -1,9 +1,11 @@
 pub(crate) mod dap;
+pub(crate) mod evil;
 pub(crate) mod lsp;
 pub(crate) mod syntax;
 pub(crate) mod typed;
 
 pub use dap::*;
+pub use evil::*;
 use futures_util::FutureExt;
 use helix_event::status;
 use helix_stdx::{
@@ -19,6 +21,7 @@ use tui::{
 };
 pub use typed::*;
 
+use helix_core::smallvec;
 use helix_core::{
     char_idx_at_visual_offset,
     chars::char_is_word,
@@ -32,7 +35,7 @@ use helix_core::{
     indent::{self, IndentStyle},
     line_ending::{get_line_ending_of_str, line_end_char_index},
     match_brackets,
-    movement::{self, move_vertically_visual, Direction},
+    movement::{self, Direction, Movement},
     object, pos_at_coords,
     regex::{self, Regex},
     search::{self},
@@ -44,6 +47,7 @@ use helix_core::{
     visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
     Selection, SmallVec, Syntax, Tendril, Transaction,
 };
+use helix_view::editor::EvilSelectMode;
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::{Action, Motion},
@@ -60,7 +64,6 @@ use helix_view::{
 use anyhow::{anyhow, bail, ensure, Context as _};
 use arc_swap::access::DynAccess;
 use insert::*;
-use movement::Movement;
 
 use crate::{
     compositor::{self, Component, Compositor},
@@ -133,6 +136,20 @@ impl Context<'_> {
         &mut self,
         on_next_key_callback: impl FnOnce(&mut Context, KeyEvent) + 'static,
     ) {
+        if evil_is_select_mode_linewise(self) {
+            return self.on_next_key_callback = Some((
+                Box::new(|cx: &mut Context, e: KeyEvent| {
+                    // See NOTE LineWise Select
+                    keep_primary_selection(cx);
+                    on_next_key_callback(cx, e);
+                    if evil_is_select_mode_linewise(cx) {
+                        evil_transform_selection_linewise(cx)
+                    }
+                }),
+                OnKeyCallbackKind::PseudoPending,
+            ));
+        };
+
         self.on_next_key_callback = Some((
             Box::new(on_next_key_callback),
             OnKeyCallbackKind::PseudoPending,
@@ -247,6 +264,28 @@ macro_rules! static_commands {
 
 impl MappableCommand {
     pub fn execute(&self, cx: &mut Context) {
+        if evil_is_select_mode_linewise(cx) {
+            // NOTE LineWise Select
+            // ======================
+            // We are in LineWise Select mode, so we have a selection
+            // with two overlapping ranges: the primary (helix) range
+            // and a secondary (evil-helix only) range that stretches
+            // until the end of the line.
+            //
+            // The command that we are currently processing is likely
+            // going to call `selection.transform`, which calls
+            // `selection.normalize` afterwards, which merges all
+            // overlapping ranges into a single range and puts the
+            // cursor at the end of that range. This is not what we
+            // want (we'd lose track of the cursor position).
+            //
+            // Therefore we:
+            // - first call `keep_primary_selection`
+            // - then process the command using the primary range only
+            // - then create the new secondary range (below)
+            keep_primary_selection(cx)
+        }
+
         match &self {
             Self::Typable { name, args, doc: _ } => {
                 if let Some(command) = typed::TYPABLE_COMMAND_MAP.get(name.as_str()) {
@@ -283,6 +322,10 @@ impl MappableCommand {
                 }));
             }
         }
+
+        if evil_is_select_mode_linewise(cx) {
+            evil_transform_selection_linewise(cx)
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -306,16 +349,28 @@ impl MappableCommand {
         no_op, "Do nothing",
         move_char_left, "Move left",
         move_char_right, "Move right",
+        move_same_line_char_left, "Move left within in the same line only",
+        move_same_line_char_right, "Move right within in the same line only",
         move_line_up, "Move up",
         move_line_down, "Move down",
+        move_anchored_line_up, "Move up with newline anchoring behaviour",
+        move_anchored_line_down, "Move down with newline anchoring behaviour",
         move_visual_line_up, "Move up",
         move_visual_line_down, "Move down",
+        move_anchored_visual_line_up, "Move up with newline anchoring behaviour",
+        move_anchored_visual_line_down, "Move down with newline anchoring behaviour",
         extend_char_left, "Extend left",
         extend_char_right, "Extend right",
+        extend_same_line_char_left, "Extend left within the same line only",
+        extend_same_line_char_right, "Extend right within the same line only",
         extend_line_up, "Extend up",
         extend_line_down, "Extend down",
+        extend_anchored_line_up, "Extend up with newline anchoring behaviour",
+        extend_anchored_line_down, "Extend down with newline anchoring behaviour",
         extend_visual_line_up, "Extend up",
         extend_visual_line_down, "Extend down",
+        extend_anchored_visual_line_up, "Extend up with newline anchoring behaviour",
+        extend_anchored_visual_line_down, "Extend down with newline anchoring behaviour",
         copy_selection_on_next_line, "Copy selection on next line",
         copy_selection_on_prev_line, "Copy selection on previous line",
         move_next_word_start, "Move to start of next word",
@@ -399,6 +454,7 @@ impl MappableCommand {
         ensure_selections_forward, "Ensure all selections face forward",
         insert_mode, "Insert before selection",
         append_mode, "Append after selection",
+        append_mode_same_line, "Append after selection within the same line only",
         command_mode, "Enter command mode",
         file_picker, "Open file picker",
         file_picker_in_current_buffer_directory, "Open file picker at current buffer's directory",
@@ -609,6 +665,29 @@ impl MappableCommand {
         decrement, "Decrement item under cursor",
         record_macro, "Record macro",
         replay_macro, "Replay macro",
+        evil_prev_word_start, "Previous word start (evil)",
+        evil_next_word_start, "Next word start (evil)",
+        evil_next_word_end, "Next word end (evil)",
+        evil_prev_long_word_start, "Previous long word start (evil)",
+        evil_next_long_word_start, "Next long word start (evil)",
+        evil_next_long_word_end, "Next long word end (evil)",
+        evil_move_paragraph_forward, "Move forward by a paragraph (evil)",
+        evil_move_paragraph_backward, "Move backward by a paragraph (evil)",
+        evil_delete, "Delete (evil)",
+        evil_delete_immediate, "Delete immediately (evil)",
+        evil_yank, "Yank (evil)",
+        evil_change, "Change (evil)",
+        evil_find_till_char, "Move till next occurrence of char (evil)",
+        evil_find_next_char, "Move to next occurrence of char (evil)",
+        evil_till_prev_char, "Move till previous occurrence of char (evil)",
+        evil_find_prev_char, "Move to previous occurrence of char (evil)",
+        evil_append_mode, "Append after character",
+        evil_cursor_forward_search, "Search forward for the word near cursor (evil)",
+        evil_cursor_backward_search, "Search backward for the word near cursor (evil)",
+        evil_goto_line_or_first_line, "Goto first line (evil)",
+        evil_goto_line_or_last_line, "Goto last line (evil)",
+        evil_characterwise_select_mode, "Enter/exit characterwise select mode",
+        evil_linewise_select_mode, "Enter/exit linewise select mode",
         command_palette, "Open command palette",
         goto_word, "Jump to a two-character label",
         extend_to_word, "Extend to a two-character label",
@@ -747,7 +826,10 @@ fn move_impl(cx: &mut Context, move_fn: MoveFn, dir: Direction, behaviour: Movem
     doc.set_selection(view.id, selection);
 }
 
-use helix_core::movement::{move_horizontally, move_vertically};
+use helix_core::movement::{
+    move_horizontally, move_horizontally_same_line, move_vertically, move_vertically_anchored,
+    move_vertically_anchored_visual, move_vertically_visual,
+};
 
 fn move_char_left(cx: &mut Context) {
     move_impl(cx, move_horizontally, Direction::Backward, Movement::Move)
@@ -757,12 +839,48 @@ fn move_char_right(cx: &mut Context) {
     move_impl(cx, move_horizontally, Direction::Forward, Movement::Move)
 }
 
+fn move_same_line_char_left(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_horizontally_same_line,
+        Direction::Backward,
+        Movement::Move,
+    )
+}
+
+fn move_same_line_char_right(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_horizontally_same_line,
+        Direction::Forward,
+        Movement::Move,
+    )
+}
+
 fn move_line_up(cx: &mut Context) {
     move_impl(cx, move_vertically, Direction::Backward, Movement::Move)
 }
 
 fn move_line_down(cx: &mut Context) {
     move_impl(cx, move_vertically, Direction::Forward, Movement::Move)
+}
+
+fn move_anchored_line_up(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored,
+        Direction::Backward,
+        Movement::Move,
+    )
+}
+
+fn move_anchored_line_down(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored,
+        Direction::Forward,
+        Movement::Move,
+    )
 }
 
 fn move_visual_line_up(cx: &mut Context) {
@@ -783,6 +901,24 @@ fn move_visual_line_down(cx: &mut Context) {
     )
 }
 
+fn move_anchored_visual_line_up(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored_visual,
+        Direction::Backward,
+        Movement::Move,
+    )
+}
+
+fn move_anchored_visual_line_down(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored_visual,
+        Direction::Forward,
+        Movement::Move,
+    )
+}
+
 fn extend_char_left(cx: &mut Context) {
     move_impl(cx, move_horizontally, Direction::Backward, Movement::Extend)
 }
@@ -791,12 +927,48 @@ fn extend_char_right(cx: &mut Context) {
     move_impl(cx, move_horizontally, Direction::Forward, Movement::Extend)
 }
 
+fn extend_same_line_char_left(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_horizontally_same_line,
+        Direction::Backward,
+        Movement::Extend,
+    )
+}
+
+fn extend_same_line_char_right(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_horizontally_same_line,
+        Direction::Forward,
+        Movement::Extend,
+    )
+}
+
 fn extend_line_up(cx: &mut Context) {
     move_impl(cx, move_vertically, Direction::Backward, Movement::Extend)
 }
 
 fn extend_line_down(cx: &mut Context) {
     move_impl(cx, move_vertically, Direction::Forward, Movement::Extend)
+}
+
+fn extend_anchored_line_up(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored,
+        Direction::Backward,
+        Movement::Extend,
+    )
+}
+
+fn extend_anchored_line_down(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored,
+        Direction::Forward,
+        Movement::Extend,
+    )
 }
 
 fn extend_visual_line_up(cx: &mut Context) {
@@ -812,6 +984,24 @@ fn extend_visual_line_down(cx: &mut Context) {
     move_impl(
         cx,
         move_vertically_visual,
+        Direction::Forward,
+        Movement::Extend,
+    )
+}
+
+fn extend_anchored_visual_line_up(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored_visual,
+        Direction::Backward,
+        Movement::Extend,
+    )
+}
+
+fn extend_anchored_visual_line_down(cx: &mut Context) {
+    move_impl(
+        cx,
+        move_vertically_anchored_visual,
         Direction::Forward,
         Movement::Extend,
     )
@@ -1284,6 +1474,20 @@ fn goto_prev_paragraph(cx: &mut Context) {
 
 fn goto_next_paragraph(cx: &mut Context) {
     goto_para_impl(cx, movement::move_next_paragraph)
+}
+
+fn evil_move_paragraph_forward(cx: &mut Context) {
+    goto_para_impl(cx, evil_movement_paragraph_forward);
+    if cx.editor.mode != Mode::Select {
+        EvilCommands::collapse_selections(cx, CollapseMode::ToHead);
+    }
+}
+
+fn evil_move_paragraph_backward(cx: &mut Context) {
+    goto_para_impl(cx, evil_movement_paragraph_backward);
+    if cx.editor.mode != Mode::Select {
+        EvilCommands::collapse_selections(cx, CollapseMode::ToHead);
+    }
 }
 
 fn goto_file_start(cx: &mut Context) {
@@ -2789,7 +2993,7 @@ fn global_search(cx: &mut Context) {
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
-enum Extend {
+pub enum Extend {
     Above,
     Below,
 }
@@ -2956,7 +3160,7 @@ fn shrink_to_line_bounds(cx: &mut Context) {
     );
 }
 
-enum Operation {
+pub enum Operation {
     Delete,
     Change,
 }
@@ -3112,7 +3316,12 @@ fn ensure_selections_forward(cx: &mut Context) {
     doc.set_selection(view.id, selection);
 }
 
-fn enter_insert_mode(cx: &mut Context) {
+pub fn enter_insert_mode(cx: &mut Context) {
+    if EvilCommands::is_enabled() {
+        // In evil mode, selections are possible in the selection/visual mode only.
+        EvilCommands::collapse_selections(cx, CollapseMode::Backward);
+    }
+
     cx.editor.mode = Mode::Insert;
 }
 
@@ -3164,6 +3373,39 @@ fn append_mode(cx: &mut Context) {
             graphemes::next_grapheme_boundary(doc.text().slice(..), range.to()),
         )
     });
+    doc.set_selection(view.id, selection);
+
+    // We already collapsed selections in `enter_insert_mode()`, but this function creates selections again,
+    // and we want to leave the cursor(s) at the end of the range(s).
+    if EvilCommands::is_enabled() {
+        EvilCommands::collapse_selections(cx, CollapseMode::Forward);
+    }
+}
+
+fn append_mode_same_line(cx: &mut Context) {
+    enter_insert_mode(cx);
+    let (view, doc) = current!(cx.editor);
+    doc.restore_cursor = true;
+    let text = doc.text().slice(..);
+
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let forward_range = range.with_direction(Direction::Forward);
+        let range_end = forward_range.cursor(text);
+        let line = text.char_to_line(range_end);
+        let line_end_char_index = line_end_char_index(&text, line);
+        let is_at_end_of_line = range_end == line_end_char_index;
+
+        let new_range_end = if is_at_end_of_line {
+            range_end
+        } else {
+            range.to()
+        };
+        Range::new(
+            range.from(),
+            graphemes::next_grapheme_boundary(doc.text().slice(..), new_range_end),
+        )
+    });
+
     doc.set_selection(view.id, selection);
 }
 
@@ -4116,7 +4358,7 @@ fn goto_last_modified_file(cx: &mut Context) {
     }
 }
 
-fn select_mode(cx: &mut Context) {
+pub fn select_mode(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     let text = doc.text().slice(..);
 
@@ -4135,9 +4377,15 @@ fn select_mode(cx: &mut Context) {
     doc.set_selection(view.id, selection);
 
     cx.editor.mode = Mode::Select;
+    cx.editor.evil_select_mode = EvilSelectMode::CharacterWise;
 }
 
-fn exit_select_mode(cx: &mut Context) {
+pub fn exit_select_mode(cx: &mut Context) {
+    if EvilCommands::is_enabled() {
+        // In evil mode, selections are possible in the selection/visual mode only.
+        EvilCommands::collapse_selections(cx, CollapseMode::ToHead);
+    }
+
     if cx.editor.mode == Mode::Select {
         cx.editor.mode = Mode::Normal;
     }
@@ -6259,6 +6507,87 @@ fn select_textobject_inner(cx: &mut Context) {
     select_textobject(cx, textobject::TextObject::Inside);
 }
 
+fn evil_cursor_forward_search(cx: &mut Context) {
+    evil_cursor_search_impl(cx, Direction::Forward);
+}
+
+fn evil_cursor_backward_search(cx: &mut Context) {
+    evil_cursor_search_impl(cx, Direction::Backward);
+}
+
+fn evil_cursor_search_impl(cx: &mut Context, direction: Direction) {
+    fn find_keyword_char(slice: RopeSlice) -> Option<usize> {
+        slice
+            .chars()
+            .position(|ch| ch.is_alphanumeric() || ch == '_')
+    }
+    fn goto_next_keyword_char_in_line(view: &mut View, doc: &mut Document) {
+        let text = doc.text().slice(..);
+
+        let selection = doc.selection(view.id).clone().transform(|range| {
+            let line = range.cursor_line(text);
+            let line_start = text.line_to_char(line);
+
+            let pos_end = graphemes::prev_grapheme_boundary(text, line_end_char_index(&text, line))
+                .max(line_start);
+
+            let anchor = range.cursor(text);
+            let search_limit = (pos_end + 1).min(text.len_chars());
+            if let Some(pos) = find_keyword_char(text.slice(anchor..search_limit)) {
+                range.put_cursor(text, anchor + pos, false)
+            } else {
+                range.put_cursor(text, anchor, false)
+            }
+        });
+        doc.set_selection(view.id, selection);
+    }
+
+    exit_select_mode(cx);
+    keep_primary_selection(cx);
+
+    let count = cx.count();
+    let (view, doc) = current!(cx.editor);
+    goto_next_keyword_char_in_line(view, doc);
+
+    let text = doc.text().slice(..);
+    let selection = doc.selection(view.id);
+
+    if selection.primary().fragment(text).trim().is_empty() {
+        cx.editor.set_error("No string under cursor");
+        return;
+    }
+
+    // Use Helix 'word' as a Vim 'keyword' equivalent
+    let objtype = textobject::TextObject::Inside;
+    let selection = selection
+        .clone()
+        .transform(|range| textobject::textobject_word(text, range, objtype, count, false));
+    doc.set_selection(view.id, selection);
+    search_selection_detect_word_boundaries(cx);
+
+    // Make the search case insensitive by prepending (?i) to the regex
+    // TODO: consider supporting case sensitive searching depending on search.smart-case
+    let register = cx.register.unwrap_or('/');
+    let regex = match cx.editor.registers.first(register, cx.editor) {
+        Some(regex) => format!("(?i){}", regex),
+        None => return,
+    };
+
+    let msg = format!("register '{}' set to '{}'", register, &regex);
+    match cx.editor.registers.push(register, regex) {
+        Ok(_) => {
+            cx.editor.registers.last_search_register = register;
+            cx.editor.set_status(msg)
+        }
+        Err(err) => {
+            cx.editor
+                .set_error(format!("Failed to update register: {}", err));
+            return;
+        }
+    }
+    search_next_or_prev_impl(cx, Movement::Move, direction);
+}
+
 fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
     let count = cx.count();
 
@@ -7224,5 +7553,211 @@ fn lsp_or_syntax_workspace_symbol_picker(cx: &mut Context) {
         lsp::workspace_symbol_picker(cx);
     } else {
         syntax_workspace_symbol_picker(cx);
+    }
+}
+
+fn evil_move_word_impl<F>(cx: &mut Context, move_fn: F)
+where
+    F: Fn(RopeSlice, Range, usize) -> Range,
+{
+    match cx.editor.mode {
+        Mode::Select => extend_word_impl(cx, move_fn),
+        _ => {
+            // When not in select mode, just move the cursor and do not select
+            move_word_impl(cx, move_fn);
+            collapse_selection(cx)
+        }
+    }
+}
+
+fn evil_prev_word_start(cx: &mut Context) {
+    // TODO: evil-specific implementation in evil.rs
+    evil_move_word_impl(cx, movement::move_prev_word_start);
+    //EvilCommands::prev_word_start(cx);
+}
+
+fn evil_next_word_start(cx: &mut Context) {
+    evil_move_word_impl(cx, EvilCommands::move_next_word_start);
+}
+
+fn evil_next_word_end(cx: &mut Context) {
+    // TODO: evil-specific implementation in evil.rs
+    evil_move_word_impl(cx, movement::move_next_word_end);
+}
+
+fn evil_prev_long_word_start(cx: &mut Context) {
+    // TODO: evil-specific implementation in evil.rs
+    evil_move_word_impl(cx, movement::move_prev_long_word_start);
+}
+
+fn evil_next_long_word_start(cx: &mut Context) {
+    evil_move_word_impl(cx, EvilCommands::move_next_long_word_start);
+}
+
+fn evil_next_long_word_end(cx: &mut Context) {
+    // TODO: evil-specific implementation in evil.rs
+    evil_move_word_impl(cx, movement::move_next_long_word_end);
+}
+
+fn evil_delete(cx: &mut Context) {
+    EvilCommands::delete(cx, Operation::Delete);
+}
+
+fn evil_delete_immediate(cx: &mut Context) {
+    if evil_is_select_mode_linewise(cx) {
+        extend_to_line_bounds(cx);
+    }
+    EvilCommands::delete_immediate(cx);
+}
+
+fn evil_yank(cx: &mut Context) {
+    EvilCommands::yank(cx);
+}
+
+fn evil_change(cx: &mut Context) {
+    EvilCommands::delete(cx, Operation::Change);
+}
+
+fn evil_find_till_char(cx: &mut Context) {
+    EvilCommands::find_char(cx, find_char, Direction::Forward, false);
+}
+
+fn evil_find_next_char(cx: &mut Context) {
+    EvilCommands::find_char(cx, find_char, Direction::Forward, true)
+}
+
+fn evil_till_prev_char(cx: &mut Context) {
+    EvilCommands::find_char(cx, find_char, Direction::Backward, false)
+}
+
+fn evil_find_prev_char(cx: &mut Context) {
+    EvilCommands::find_char(cx, find_char, Direction::Backward, true)
+}
+
+fn evil_characterwise_select_mode(cx: &mut Context) {
+    // TODO: move implementation to evil.rs
+
+    fn switch_to_characterwise(cx: &mut Context) {
+        cx.editor.evil_select_mode = EvilSelectMode::CharacterWise;
+    }
+
+    if cx.editor.mode != Mode::Select {
+        select_mode(cx);
+        switch_to_characterwise(cx);
+    } else {
+        match cx.editor.evil_select_mode {
+            EvilSelectMode::LineWise => switch_to_characterwise(cx),
+            EvilSelectMode::CharacterWise => exit_select_mode(cx),
+        }
+    }
+}
+
+fn evil_linewise_select_mode(cx: &mut Context) {
+    // TODO: move implementation to evil.rs
+
+    fn switch_to_linewise(cx: &mut Context) {
+        cx.editor.evil_select_mode = EvilSelectMode::LineWise;
+    }
+
+    if cx.editor.mode != Mode::Select {
+        select_mode(cx);
+        switch_to_linewise(cx);
+    } else {
+        match cx.editor.evil_select_mode {
+            EvilSelectMode::LineWise => exit_select_mode(cx),
+            EvilSelectMode::CharacterWise => switch_to_linewise(cx),
+        }
+    }
+}
+
+fn evil_is_select_mode_linewise(cx: &Context) -> bool {
+    // TODO: move implementation to evil.rs
+
+    if cx.editor.mode == Mode::Select {
+        match cx.editor.evil_select_mode {
+            EvilSelectMode::LineWise => true,
+            EvilSelectMode::CharacterWise => false,
+        }
+    } else {
+        false
+    }
+}
+
+fn evil_transform_selection_linewise(cx: &mut Context) {
+    // TODO: move implementation to evil.rs
+
+    // LineWise Select
+    // ===============
+    // This function creates a selection with two overlapping ranges.
+    //
+    // It take the primary range and, assuming it is in the forward direction,
+    // moves its anchor to the start of the line. Then it creates a secondary
+    // selection from the end of the line to the the cursor. So the cursors of
+    // the two ranges are overlapping. To the user this should look like a
+    // single selection with the cursor somewhere in the middle of the last
+    // line, just like Vim does in linewise visual mode.
+    //
+    // Do not call `normalize` on the selection, as it would merge them.
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let range = doc.selection(view.id).clone().primary(); // TODO: handle more than 1 selection?
+
+    // Copy/paste from `extend_to_line_bounds`.
+    let (start_line, end_line) = range.line_range(text.slice(..));
+    let start = text.line_to_char(start_line);
+    let end = text.line_to_char((end_line + 1).min(text.len_lines()));
+
+    let selection = if range.direction() == Direction::Forward {
+        let primary = Range::new(start, range.head);
+        let secondary = Range::new(end, graphemes::prev_grapheme_boundary(text, range.head));
+        Selection::evil_new_no_normalize(smallvec![primary, secondary], 0)
+    } else {
+        let primary = Range::new(end, range.head);
+        let secondary = Range::new(start, graphemes::next_grapheme_boundary(text, range.head));
+        Selection::evil_new_no_normalize(
+            // Sorted by [Range::from]
+            smallvec![secondary, primary],
+            1,
+        )
+    };
+    doc.evil_set_selection_no_normalize(view.id, selection);
+}
+
+fn evil_append_mode(cx: &mut Context) {
+    // TODO: move implementation to evil.rs
+
+    append_mode_same_line(cx);
+    collapse_selection(cx);
+}
+
+fn evil_goto_line_or_first_line(cx: &mut Context) {
+    // TODO: move implementation to evil.rs
+
+    // TODO: this also moves the selection to the first position on the first line
+    goto_file_start_impl(
+        cx,
+        match cx.editor.mode {
+            Mode::Select => Movement::Extend,
+            _ => Movement::Move,
+        },
+    );
+}
+
+fn evil_goto_line_or_last_line(cx: &mut Context) {
+    // TODO: move implementation to evil.rs
+
+    if cx.count.is_some() {
+        let (view, doc) = current!(cx.editor);
+        push_jump(view, doc);
+
+        goto_line_without_jumplist(cx.editor, cx.count, Movement::Move);
+    } else {
+        goto_last_line_impl(
+            cx,
+            match cx.editor.mode {
+                Mode::Select => Movement::Extend,
+                _ => Movement::Move,
+            },
+        );
     }
 }
