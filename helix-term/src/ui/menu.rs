@@ -1,4 +1,5 @@
 use crate::{
+    alt,
     compositor::{Callback, Component, Compositor, Context, Event, EventResult},
     ctrl, key, shift,
 };
@@ -263,35 +264,35 @@ impl<T: Item + 'static> Component for Menu<T> {
 
         match event {
             // esc or ctrl-c aborts the completion and closes the menu
-            key!(Esc) | ctrl!('c') => {
+            key!(Esc) | ctrl!('c') | alt!('h') => {
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Abort);
                 return EventResult::Consumed(close_fn);
             }
             // arrow up/ctrl-p/shift-tab prev completion choice (including updating the doc)
-            shift!(Tab) | key!(Up) | ctrl!('p') => {
+            key!(Up) | alt!('k') => {
                 self.move_up();
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Update);
                 return EventResult::Consumed(None);
             }
-            key!(Tab) | key!(Down) | ctrl!('n') => {
+            key!(Down) | alt!('j') => {
                 // arrow down/ctrl-n/tab advances completion choice (including updating the doc)
                 self.move_down();
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Update);
                 return EventResult::Consumed(None);
             }
-            key!(PageUp) | ctrl!('u') => {
+            key!(PageUp) | ctrl!('k') => {
                 // page up moves back in the completion choice (including updating the doc)
                 self.move_half_page_up();
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Update);
                 return EventResult::Consumed(None);
             }
-            key!(PageDown) | ctrl!('d') => {
+            key!(PageDown) | ctrl!('j') => {
                 // page down advances completion choice (including updating the doc)
                 self.move_half_page_down();
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Update);
                 return EventResult::Consumed(None);
             }
-            key!(Enter) => {
+            alt!(Enter) | alt!('l') => {
                 if let Some(selection) = self.selection() {
                     (self.callback_fn)(cx.editor, Some(selection), MenuEvent::Validate);
                     return EventResult::Consumed(close_fn);
