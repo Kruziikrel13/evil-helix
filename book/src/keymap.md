@@ -339,10 +339,10 @@ Displays documentation for the selected completion item. Remapping currently not
 
 | Key                         | Description                      |
 | ----                        | -----------                      |
-| `Shift-Tab`, `Ctrl-p`, `Up` | Previous entry                   |
-| `Tab`, `Ctrl-n`, `Down`     | Next entry                       |
-| `Enter`                     | Close menu and accept completion |
-| `Ctrl-c`                    | Close menu and reject completion |
+| `Alt-k`, `Up`               | Previous entry                   |
+| `Alt-j`, `Down`             | Next entry                       |
+| `Alt-Enter`, `Alt-l`        | Close menu and accept completion |
+| `Escape`, `Ctrl-c`, `Alt-h` | Close menu and reject completion |
 
 Any other keypresses result in the completion being accepted.
 
@@ -470,15 +470,15 @@ See the documentation page on [pickers](./pickers.md) for more info.
 
 | Key                          | Description                                                |
 | -----                        | -------------                                              |
-| `Shift-Tab`, `Up`, `Ctrl-p`  | Previous entry                                             |
-| `Tab`, `Down`, `Ctrl-n`      | Next entry                                                 |
-| `PageUp`, `Ctrl-u`           | Page up                                                    |
-| `PageDown`, `Ctrl-d`         | Page down                                                  |
+| `Up`, `Alt-k`                | Previous entry                                             |
+| `Down`, `Alt-j`              | Next entry                                                 |
+| `PageUp`, `Ctrl-k`           | Page up                                                    |
+| `PageDown`, `Ctrl-j`         | Page down                                                  |
 | `Home`                       | Go to first entry                                          |
 | `End`                        | Go to last entry                                           |
 | `Enter`                      | Open selected                                              |
 | `Alt-Enter`                  | Open selected in the background without closing the picker |
-| `Ctrl-s`                     | Open horizontally                                          |
+| `Ctrl-x`                     | Open horizontally                                          |
 | `Ctrl-v`                     | Open vertically                                            |
 | `Ctrl-t`                     | Toggle preview                                             |
 | `Escape`, `Ctrl-c`           | Close picker                                               |

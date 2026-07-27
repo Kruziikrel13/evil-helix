@@ -4,7 +4,7 @@ mod query;
 use crate::{
     alt,
     compositor::{self, Component, Compositor, Context, Event, EventResult},
-    ctrl, key, shift,
+    ctrl, key,
     ui::{
         self,
         document::{render_document, LinePos, TextRenderer},
@@ -1087,16 +1087,16 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
         };
 
         match key_event {
-            shift!(Tab) | key!(Up) | ctrl!('p') => {
+            alt!('k') | key!(Up) => {
                 self.move_by(1, Direction::Backward);
             }
-            key!(Tab) | key!(Down) | ctrl!('n') => {
+            alt!('j') | key!(Down) => {
                 self.move_by(1, Direction::Forward);
             }
-            key!(PageDown) | ctrl!('d') => {
+            key!(PageDown) | ctrl!('j') => {
                 self.page_down();
             }
-            key!(PageUp) | ctrl!('u') => {
+            key!(PageUp) | ctrl!('k') => {
                 self.page_up();
             }
             key!(Home) => {
@@ -1146,7 +1146,7 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                     return close_fn(self);
                 }
             }
-            ctrl!('s') => {
+            ctrl!('x') => {
                 if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, Action::HorizontalSplit);
                 }
