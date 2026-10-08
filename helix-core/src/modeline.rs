@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::indent::IndentStyle;
 use crate::regex::Regex;
@@ -11,9 +11,9 @@ use crate::{LineEnding, RopeSlice};
 const LINES_TO_CHECK: usize = 5;
 const LENGTH_TO_CHECK: usize = 256;
 
-static VIM_MODELINE_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(\S*\s+)?(vi|[vV]im[<=>]?\d*|ex):\s*(set?\s+)?").unwrap());
-static HELIX_MODELINE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\S*\s+)?helix:").unwrap());
+static VIM_MODELINE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\S*\s+)?(vi|[vV]im[<=>]?\d*|ex):\s*(set?\s+)?").unwrap());
+static HELIX_MODELINE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\S*\s+)?helix:").unwrap());
 
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct Modeline {

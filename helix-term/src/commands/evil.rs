@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, LazyLock},
 };
 
 use helix_core::movement::{is_word_boundary, Direction};
@@ -16,7 +16,6 @@ use helix_core::{Range, Selection, Transaction};
 use helix_view::document::Mode;
 use helix_view::editor::EvilSelectMode;
 use helix_view::input::KeyEvent;
-use once_cell::sync::Lazy;
 
 use crate::commands::{
     enter_insert_mode, exit_select_mode, Context, Extend, OnKeyCallbackKind, Operation,
@@ -164,7 +163,7 @@ impl EvilContext {
     }
 }
 
-static CONTEXT: Lazy<RwLock<EvilContext>> = Lazy::new(|| {
+static CONTEXT: LazyLock<RwLock<EvilContext>> = LazyLock::new(|| {
     RwLock::new(EvilContext {
         command: None,
         modifier: None,
