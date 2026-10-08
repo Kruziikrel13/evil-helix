@@ -1,0 +1,33 @@
+name: Update Inputs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0,12 * * *" # Midnight & Midday
+      timezone: Australia/Brisbane
+
+jobs:
+  update:
+    runs-on: native
+    steps:
+      - name: Checkout Project
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ forgejo.head_ref || forgejo.ref_name }}
+          token: ${{ secrets.FORGEJO_TOKEN }}
+      - name: Update Inputs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }} # To avoid rate limiting
+        run: nix flake update
+      - uses: actions/initialise-git@v2
+        with:
+          token: ${{ secrets.FORGEJO_TOKEN }}
+      - name: Commit Changes
+        run: |
+          git add -A
+          git diff --cached --quiet || git commit -m "chore: update flake inputs"
+      - name: Push
+        env:
+          GIT_TERMINAL_PROMPT: "0" # To prevent terminal hangs
+        run: |
+          git push origin "${{ forgejo.head_ref || forgejo.ref_name }}"
